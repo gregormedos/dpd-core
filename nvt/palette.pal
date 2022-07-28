@@ -1,0 +1,38 @@
+# line styles
+set style line  1 dt 1 lw 2 pt 7 lc rgb '#1f77b4' # blue
+set style line  2 dt 1 lw 2 pt 7 lc rgb '#ff7f0e' # orange
+set style line  3 dt 1 lw 2 pt 7 lc rgb '#2ca02c' # green
+set style line  4 dt 1 lw 2 pt 7 lc rgb '#d62728' # red
+set style line  5 dt 1 lw 2 pt 7 lc rgb '#9467bd' # purple
+set style line  6 dt 1 lw 2 pt 7 lc rgb '#8c564b' # brown
+set style line  7 dt 1 lw 2 pt 7 lc rgb '#e377c2' # pink
+set style line  8 dt 1 lw 2 pt 7 lc rgb '#7f7f7f' # yellow
+
+set style line  9 dt 2 lw 2 pt 7 lc rgb '#1f77b4' # blue
+set style line 10 dt 2 lw 2 pt 7 lc rgb '#ff7f0e' # orange
+set style line 11 dt 2 lw 2 pt 7 lc rgb '#2ca02c' # green
+set style line 12 dt 2 lw 2 pt 7 lc rgb '#d62728' # red
+set style line 13 dt 2 lw 2 pt 7 lc rgb '#9467bd' # purple
+set style line 14 dt 2 lw 2 pt 7 lc rgb '#8c564b' # brown
+set style line 15 dt 2 lw 2 pt 7 lc rgb '#e377c2' # pink
+set style line 16 dt 2 lw 2 pt 7 lc rgb '#7f7f7f' # yellow
+
+set style line 17 dt 3 lw 2 pt 7 lc rgb '#1f77b4' # blue
+set style line 18 dt 3 lw 2 pt 7 lc rgb '#ff7f0e' # orange
+set style line 19 dt 3 lw 2 pt 7 lc rgb '#2ca02c' # green
+set style line 20 dt 3 lw 2 pt 7 lc rgb '#d62728' # red
+set style line 21 dt 3 lw 2 pt 7 lc rgb '#9467bd' # purple
+set style line 22 dt 3 lw 2 pt 7 lc rgb '#8c564b' # brown
+set style line 23 dt 3 lw 2 pt 7 lc rgb '#e377c2' # pink
+set style line 24 dt 3 lw 2 pt 7 lc rgb '#7f7f7f' # yellow
+
+# palette
+set palette maxcolors 8
+set palette defined ( 0 '#1f77b4',\
+    	    	      1 '#ff7f0e',\
+		              2 '#2ca02c',\
+		              3 '#d62728',\
+		              4 '#9467bd',\
+		              5 '#8c564b',\
+		              6 '#e377c2',\
+		              7 '#7f7f7f' )
