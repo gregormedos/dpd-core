@@ -1,6 +1,6 @@
 module parameters
   !ensemble parameters
-  integer :: N                  !number of particles (N)
+  integer :: N                  !number of particles
   real*8 :: dens                !density
   real*8 :: temp                !temperature
   !simulation parameters
@@ -9,8 +9,9 @@ module parameters
   integer :: cutoff             !flag to switch on or off potential cutoff
   real*8 :: rcut                !cutoff distance for potential
   integer :: ran                !random seed
-  integer :: nseries            !number of series of sampling (MAX 20)
-  integer :: snap,sam,frame     !flags to switch on or off snapshots, energies, frames
+  integer :: nseries            !number of series of samples
+  integer :: nsampl             !number of time steps for sampling
+  integer :: f_snap,f_sam,f_frame     !flags to switch on or off snapshots, energies, frames
   integer :: nsam               !number of time steps per energy saved
   integer :: nframes            !number of frames saved
   integer :: nframe             !number of time steps per frame saved
@@ -24,34 +25,44 @@ module parameters
 endmodule parameters
 
 module particles
-  real*8, dimension(:,:), allocatable :: pos               !matrix of position vectors
-  real*8, dimension(:,:), allocatable :: vel               !matrix of velocity vectors
-  real*8, dimension(:,:), allocatable :: acc               !matrix of acceleration vectors
+  real*8,dimension(:,:),allocatable :: pos               !matrix of position vectors
+  real*8,dimension(:,:),allocatable :: vel               !matrix of velocity vectors
+  real*8,dimension(:,:),allocatable :: acc               !matrix of acceleration vectors
 endmodule particles
 
 module potential
-  real*8, dimension(:,:), allocatable :: pot               !matrix of potential energies
-  real*8, dimension(:,:), allocatable :: tla               !matrix of virial pressures
-  real*8, dimension(:,:,:), allocatable :: sil             !matrix of forces
-  real*8, dimension(:,:), allocatable :: dis               !matrix of distances
-  real*8, dimension(:,:), allocatable :: dis2              !matrix of distances squared
-  real*8, dimension(:,:,:), allocatable :: rrr             !matrix of distance vectors
+  real*8,dimension(:,:),allocatable :: pot               !matrix of potential energies
+  real*8,dimension(:,:),allocatable :: tla               !matrix of virial pressures
+  real*8,dimension(:,:,:),allocatable :: sil             !matrix of forces
+  real*8,dimension(:,:),allocatable :: dis               !matrix of distances
+  real*8,dimension(:,:),allocatable :: dis2              !matrix of distances squared
+  real*8,dimension(:,:,:),allocatable :: rrr             !matrix of distance vectors
 endmodule potential
 
-module energy
+module microstate
   real*8 :: ekin                    !kinetic energy
   real*8 :: tem                     !equipartion theorem temperature
-  real*8 :: u,uu,uu2                !potential energy, excess internal energy, excess internal energy squared
+  real*8 :: u                       !excess internal energy
   real*8 :: etot                    !total internal energy
-  real*8 :: p,pp                    !virial pressure
-  integer :: m                      !number of samples
-endmodule energy
+  real*8 :: p                       !virial theorem pressure
+endmodule microstate
+
+module macrostate
+  real*8 :: eekin                   !average kinetic energy
+  real*8 :: ttem                    !average temperature
+  real*8 :: uu,uu2                  !average excess internal energy
+  real*8 :: eetot                   !average internal energy
+  real*8 :: pp                      !average pressure
+  integer :: nsampls                !number of samples
+endmodule macrostate
 
 module correlation
-  real*8, dimension(10000) :: gr                !correlation function g(r)
   real*8 :: grinterv                            !g(r) radial interval
-  integer :: ncorr                              !cycles/steps per sampling
-  integer :: mcorr                              !number of samples
+  real*8,dimension(:,:),allocatable :: gr       !pair correlation function g(r) samples
+  real*8,dimension(:),allocatable :: vt,shear,flux
+  real*8,dimension(:,:),allocatable :: vel0
+  real*8,dimension(:),allocatable :: shear0
+  real*8,dimension(:),allocatable :: flux0
 endmodule correlation
 
 
@@ -59,25 +70,23 @@ program core
   use parameters
   use particles
   use potential
-  use energy
+  use macrostate
   use correlation
   implicit none
-  real*8 :: time1,time2                         !CPU_time
-  integer, dimension(8) :: values1,values2      !value(1)=year, value(2)=month, value(3)=day, value(4)=time difference with UTC in minutes, value(5)=hour, value(6)=minute, value(7)=second, value(8)=milisecond
   character :: tekst
   character(8) :: fmt
   integer :: i,j
   real*8 :: cv                                  !heat capacity
-  real*8 :: dgr(10000),ggr(10000,20)            !correlation function
+  real*8 :: c                                   !numerical constant
+  real*8 :: stru                                !translational order parameter
+  real*8,dimension(:),allocatable :: vvt,vvt2,ssh,ssh2,ffl,ffl2
+  real*8 :: dif                                 !diffusion coefficient
+  real*8 :: vis                                 !viscosity
+  real*8 :: thec                                !thermal conductivity
+  real*8,dimension(:),allocatable :: ggr        !average g(r)
+  real*8,dimension(:),allocatable :: dgr        !estimated error of g(r)
 
-  call cpu_time(time1)
-  call date_and_time(VALUES=values1)
-  open(1002,file='md.log')
-  write(1002,*)'-------------------------------------------------------------------------'
-  write(1002,*)'start date and time YYYY, MM, DD, UTC, HH, MIN, SS'
-  write(1002,'(8i5)')values1
-
-  open(1001,file='param')
+  open(1001,file='md_param')
   read(1001,*)tekst
   read(1001,*)tekst,N
   read(1001,*)tekst,dens
@@ -88,10 +97,11 @@ program core
   read(1001,*)tekst,rcut
   read(1001,*)tekst,ran
   read(1001,*)tekst,nseries
-  read(1001,*)tekst,snap
-  read(1001,*)tekst,sam
+  read(1001,*)tekst,nsampl
+  read(1001,*)tekst,f_snap
+  read(1001,*)tekst,f_sam
   read(1001,*)tekst,nsam
-  read(1001,*)tekst,frame
+  read(1001,*)tekst,f_frame
   read(1001,*)tekst,nframes
   read(1001,*)tekst,nframe
   read(1001,*)tekst
@@ -100,7 +110,6 @@ program core
   read(1001,*)tekst,tstep
   read(1001,*)tekst
   read(1001,*)tekst,grinterv
-  read(1001,*)tekst,ncorr
   close(1001)
 
   allocate( pos(N,2) )
@@ -112,10 +121,27 @@ program core
   allocate( dis(N,N) )
   allocate( dis2(N,N) )
   allocate( rrr(N,N,2) )
+  allocate( gr(nseries,10000) )
+  allocate( ggr(10000) )
+  allocate( dgr(10000) )
+  allocate( vt(0:ntsteps) )
+  allocate( shear(0:ntsteps) )
+  allocate( flux(0:ntsteps) )
+  allocate( vel0(N,2) )
+  allocate( shear0(N) )
+  allocate( flux0(N) )
+  allocate( vvt(0:ntsteps) )
+  allocate( vvt2(0:ntsteps) )
+  allocate( ssh(0:ntsteps) )
+  allocate( ssh2(0:ntsteps) )
+  allocate( ffl(0:ntsteps) )
+  allocate( ffl2(0:ntsteps) )
   lbox=dsqrt(dble(N)/dens)
   dt2=tstep/2.0d0
   d2t2=tstep**2/2.0d0
 
+  open(1002,file='md.log')
+  write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'N=',N
   write(1002,*)'V=',lbox**2
   write(1002,*)'T=',temp
@@ -125,78 +151,135 @@ program core
   write(1002,*)'time step=',tstep
   write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'Molecular Dynamics (MD) simulation of 2D Lennard-Jones (LJ) discs'
+  write(1002,*)'-------------------------------------------------------------------------'
+
 
   !----------------------------------------------------------
   !MD
   !----------------------------------------------------------
   call random_pos()
-  if (snap.eq.1) call snapshot('sta')
-  write(1002,*)'-------------------------------------------------------------------------'
+  if (f_snap.eq.1) call snapshot('sta')
   write(1002,*)'particles randomly put in box'
+  write(1002,*)'-------------------------------------------------------------------------'
 
   call init_pos()
-  if (snap.eq.1) call snapshot('int')
-  write(1002,*)'-------------------------------------------------------------------------'
+  if (f_snap.eq.1) call snapshot('int')
   write(1002,*)'positions initialized'
+  write(1002,*)'-------------------------------------------------------------------------'
 
   call init_vel()
-  write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'velocities initialized'
-
-  call mdequil()
-  if (snap.eq.1) call snapshot('ekv')
   write(1002,*)'-------------------------------------------------------------------------'
+
+  call equil()
+  if (f_snap.eq.1) call snapshot('ekv')
   write(1002,*)'MD equilibration successful'
+  write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'uu/N=',uu/dble(N)
   write(1002,*)'pp=',pp
+  write(1002,*)'eekin=',eekin
+  write(1002,*)'ttem=',ttem
+  write(1002,*)'eetot=',eetot
   write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'MD simulation initialized'
+  write(1002,*)'-------------------------------------------------------------------------'
 
-  open(223,file='md-td.dat')
-  write(223,'(4a16)')'temperature','density','ex energy/N','ex heat cap','pressure'
+  open(223,file='md_td.dat')
+  write(223,'(10a16)')'temperature','density','ex energy/N','ex energy**2/N','ex heat cap','pressure', &
+  & 'trans order','diffusion','viscosity','therm cond'
+  !correlation module
+  gr=0.0d0
+  vvt=0.0d0
+  vvt2=0.0d0
+  ssh=0.0d0
+  ssh2=0.0d0
+  ffl=0.0d0
+  ffl2=0.0d0
   do j=1,nseries
     call mdseries(j)
-    write(fmt,'(i3.3)')j
-    if (snap.eq.1) call snapshot(trim(fmt))
-    cv=(uu2-uu**2)/temp**2
-    ggr(:,j)=gr(:)
-    write(223,'(5e16.7)')temp,dens,uu/dble(N),cv,pp
-    write(1002,*)'-------------------------------------------------------------------------'
+    if (f_snap.eq.1) then
+      write(fmt,'(i3.3)')j
+      call snapshot(trim(fmt))
+    endif
+    cv=(uu2-uu**2)/temp**2/dble(N)
+    do i=1,10000
+      c=Pi*dble(2*i-1)*grinterv**2
+      gr(j,i)=gr(j,i)/dble(N-1)/dble(nsampls)/dens/c
+    enddo
+    stru=0.0d0
+    do i=1,10000
+      if ( (dble(i+1)-0.5d0)*grinterv .lt. lbox/2.0d0 ) stru=stru+(dabs(gr(j,i)-1.0d0)+dabs(gr(j,i+1)-1.0d0))*grinterv/2.0d0
+    enddo
+    stru=stru*dsqrt(dens)
+    do i=0,ntsteps
+      vvt(i)=vvt(i)+vt(i)
+      vvt2(i)=vvt2(i)+vt(i)**2
+      ssh(i)=ssh(i)+shear(i)
+      ssh2(i)=ssh2(i)+shear(i)**2
+      ffl(i)=ffl(i)+flux(i)
+      ffl2(i)=ffl2(i)+flux(i)**2
+    enddo
+    dif=0.0d0
+    vis=0.0d0
+    thec=0.0d0
+    do i=1,ntsteps
+      dif=dif+(vt(i)+vt(i-1))*dt2
+      vis=vis+(shear(i)+shear(i-1))*dt2
+      thec=thec+(flux(i)+flux(i-1))*dt2
+    enddo
+    dif=dif/4.0d0
+    vis=vis*dens/temp
+    thec=thec*dens/temp**2
+    write(223,'(10e16.7)')temp,dens,uu/dble(N),uu2/dble(N),cv,pp,stru,dif,vis,thec
     write(1002,*) j,'-th MD run successful'
     write(1002,*)'uu/N=',uu/dble(N)
+    write(1002,*)'uu2/N=',uu2/dble(N)
     write(1002,*)'cv=',cv
     write(1002,*)'pp=',pp
+    write(1002,*)'stru=',stru
+    write(1002,*)'dif=',dif
+    write(1002,*)'vis=',vis
+    write(1002,*)'thec=',thec
+    write(1002,*)'eekin=',eekin
+    write(1002,*)'ttem=',ttem
+    write(1002,*)'eetot=',eetot
+    write(1002,*)'-------------------------------------------------------------------------'
   enddo
   close(223)
 
-  open(202,file='md-gr.dat')
-  gr=0.0d0
+  open(202,file='md_corr.dat')
+  ggr=0.0d0
   dgr=0.0d0
   do i=1,10000
     do j=1,nseries
-      gr(i)=gr(i)+ggr(i,j)
+      ggr(i)=ggr(i)+gr(j,i)
     enddo
-    gr(i)=gr(i)/dble(nseries)
+    ggr(i)=ggr(i)/dble(nseries)
     do j=1,nseries
-      dgr(i)=dgr(i)+(ggr(i,j)-gr(i))**2
+      dgr(i)=dgr(i)+(gr(j,i)-ggr(i))**2
     enddo
     dgr(i)=dsqrt(dgr(i)/dble(nseries))
-    write(202,'(3f16.7)')(dble(i)-0.5d0)*grinterv,gr(i),dgr(i)
+    if ( (dble(i)-0.5d0)*grinterv .lt. lbox ) write(202,'(3e16.7)')(dble(i)-0.5d0)*grinterv,ggr(i),dgr(i)
   enddo
   close(202)
 
-  call cpu_time(time2)
-  call date_and_time(VALUES=values2)
+  open(202,file='md_acorr.dat')
+  vvt=vvt/dble(nseries)
+  vvt2=vvt2/dble(nseries)
+  ssh=ssh/dble(nseries)
+  ssh2=ssh2/dble(nseries)
+  ffl=ffl/dble(nseries)
+  ffl2=ffl2/dble(nseries)
+  do i=1,ntsteps
+    write(202,'(13e16.7)')dble(i)*tstep, &
+    & vvt(i),dsqrt(vvt2(i)-vvt(i)**2),vvt(i)/vvt(0), &
+    & ssh(i),dsqrt(ssh2(i)-ssh(i)**2),ssh(i)/ssh(0), &
+    & ffl(i),dsqrt(ffl2(i)-ffl(i)**2),ffl(i)/ffl(0)
+  enddo
+  close(202)
+
+  write(1002,*)'DONE'
   write(1002,*)'-------------------------------------------------------------------------'
-  write(1002,*)'CPU simulation time=',time2-time1
-  write(1002,*)'start and finish date and time YYYY, MM, DD, UTC, HH, MIN, SS'
-  write(1002,'(8i5)')values1
-  write(1002,'(8i5)')values2
-  time2=(values2(8)-values1(8))/1000.0d0+values2(7)-values1(7)
-  time2=time2+(values2(6)-values1(6))*60.0d0
-  time2=time2+(values2(5)-values1(5))*60.0d0*60.0d0
-  time2=time2+(values2(3)-values1(3))*60.0d0*60.0d0*24.0d0
-  write(1002,*)'real simulation time=',time2
   close(1002)
 
   deallocate( pos )
@@ -208,8 +291,11 @@ program core
   deallocate( dis )
   deallocate( dis2 )
   deallocate( rrr )
+  deallocate( gr )
+  deallocate( ggr )
+  deallocate( dgr )
 
-  open(1002,file='md-DONE')
+  open(1002,file='md_DONE')
   close(1002)
 endprogram core
 
@@ -320,7 +406,7 @@ subroutine interactions()
   use parameters
   use particles
   use potential
-  use energy
+  use microstate
   implicit none
   real*8 :: image,ljpot,tl !functions
   real*8 :: x,y,r,r2
@@ -334,7 +420,7 @@ subroutine interactions()
   dis2=0.0d0
   rrr=0.0d0
 
-  !energy module
+  !microstate module
   u=0.0d0
   p=0.0d0
 
@@ -363,7 +449,7 @@ subroutine interactions()
         dis2(j,i)=r2
         rrr(j,i,1)=-x
         rrr(j,i,2)=-y
-        !energy module
+        !microstate module
         u=u+pot(i,j)
         p=p+tla(i,j)
       else
@@ -388,7 +474,7 @@ subroutine interactions()
 endsubroutine interactions
 
 !----------------------------------------------------------------------------------------------------
-!Calculates the CS potential between two particles
+!Calculates the Lennard-Jones potential between two particles
 !----------------------------------------------------------------------------------------------------
 function ljpot(r2,a1,a2,p)
   implicit none
@@ -398,7 +484,7 @@ function ljpot(r2,a1,a2,p)
   !a1=epsilon = absolute value of the minimum value of the LJ potential (depth of the potential well)
   !a2=sigma = distance at which the potential becomes positive
   real*8 :: x
-  real*8 :: ljpot,p !CS potential, virial pressure
+  real*8 :: ljpot,p !LJ potential, virial pressure
 
   x=a2**2/r2
   x=x**3
@@ -406,29 +492,6 @@ function ljpot(r2,a1,a2,p)
   p=48.0d0*a1*x*(x-0.5d0)        ! -dU/dr * r = F * r
   return
 endfunction ljpot
-
-!----------------------------------------------------------------------------------------------------
-!Pair correlation function g(r) -- Radial distribution function
-!----------------------------------------------------------------------------------------------------
-subroutine corr()
-  use parameters
-  use potential
-  use correlation
-  implicit none
-  integer :: i,j
-  integer :: k
-  real*8 :: r
-
-  do i=1,N-1
-    do j=i+1,N
-      r=dis(i,j)
-      k=int(r/grinterv)        !floors double to integer
-      if (k.lt.10000) then
-        gr(k+1)=gr(k+1)+2.0d0
-      endif
-    enddo
-  enddo
-endsubroutine corr
 
 !---------------------------------------------------------------------------------------------
 !Initializes positions for a homogeneous fluid
@@ -455,12 +518,12 @@ endsubroutine init_pos
 
 !-------------------------------------------------------------------------------------------------------------------------------
 !Initializes velocities for an isotropic fluid
-!Box-Muller transform for Maxwell-Boltzmann distribution
+!Box-Muller transform with Marsaglia polar method for Maxwell-Boltzmann distribution
 !-------------------------------------------------------------------------------------------------------------------------------
 subroutine init_vel()
   use parameters
   use particles
-  use energy
+  use microstate
   implicit none
   integer :: i
   real*8 :: ran3 !function
@@ -468,7 +531,9 @@ subroutine init_vel()
   real*8 :: sumvel(2)
   real*8 :: rescale
 
-  !Box-Muller transform
+  !Box-Muller transform with Marsaglia polar method
+  x1=0.0d0
+  x2=0.0d0
   sigma=dsqrt(temp)
   do i=1,N
     s=2.0d0
@@ -506,7 +571,7 @@ endsubroutine init_vel
 subroutine temperature()
   use parameters
   use particles
-  use energy
+  use microstate
   implicit none
   integer :: i
 
@@ -528,7 +593,7 @@ endsubroutine temperature
 subroutine move()
   use parameters
   use particles
-  use energy
+  use microstate
   implicit none
   integer :: i
   real*8 :: image !function
@@ -565,38 +630,54 @@ endsubroutine move
 !----------------------------------------------------------------------------------------------------
 !MD equilibration
 !----------------------------------------------------------------------------------------------------
-subroutine mdequil()
+subroutine equil()
   use parameters
   use particles
-  use energy
+  use microstate
+  use macrostate
   implicit none
   integer :: i
   real*8 :: t
 
-  t=0.0d0
-  uu=0.0d0
-  pp=0.0d0
-  m=0
-
-  open(202,file='md-ekv.sam')
   call interactions()
   call temperature()
+  t=0.0d0
+
+  !macrostate module
+  eekin=0.0d0
+  ttem=0.0d0
+  uu=0.0d0
+  eetot=0.0d0
+  pp=0.0d0
+  nsampls=0
+
+  !macrostate = average over microstates
+  if (f_sam.eq.1) open(202,file='md_ekv.sam')
   do i=1,nesteps
     call move()
     t=t+tstep
-    etot=ekin+u
-    if ( (sam.eq.1).and.(mod(i,nsam).eq.0) ) write(202,'(6f16.7)')t,u,ekin,etot,p,tem
-    uu=uu+u
-    pp=pp+p
-    m=m+1
+    if (mod(i,nsampl).eq.0) then
+      etot=ekin+u
+      if ( (f_sam.eq.1).and.(mod(i,nsam).eq.0) ) write(202,'(6e16.7)')t,ekin,tem,u,etot,p
+      uu=uu+u
+      pp=pp+p
+      nsampls=nsampls+1
+      eekin=eekin+ekin
+      ttem=ttem+tem
+      eetot=eetot+etot
+    endif
   enddo
-  close(202)
+  if (f_sam.eq.1) close(202)
 
-  uu=uu/dble(m)
-  pp=pp/dble(m)
+  !macrostate module
+  uu=uu/dble(nsampls)
+  pp=pp/dble(nsampls)
   pp=1.0d0+pp/2.0d0/dble(N)/temp
   pp=pp*dens*temp
-endsubroutine mdequil
+  eekin=eekin/dble(nsampls)
+  ttem=ttem/dble(nsampls)
+  eetot=eetot/dble(nsampls)
+endsubroutine equil
 
 !----------------------------------------------------------------------------------------------------
 !MD sampling
@@ -604,59 +685,128 @@ endsubroutine mdequil
 subroutine mdseries(idum)
   use parameters
   use particles
-  use energy
+  use potential
+  use microstate
+  use macrostate
   use correlation
   implicit none
   integer :: idum
   character(8) :: fmt
-  real*8 :: c                                   !numerical constant
-  integer :: i
+  integer :: i,j
   real*8 :: t
 
+  call interactions()
+  call temperature()
   t=0.0d0
+
+  !macrostate module
   uu=0.0d0
   uu2=0.0d0
   pp=0.0d0
-  m=0
+  eekin=0.0d0
+  ttem=0.0d0
+  eetot=0.0d0
+  nsampls=0
 
-  gr=0.0d0
-  mcorr=0
+  !correlation module
+  vel0=vel
+  do i=1,N
+    shear0(i)=vel(i,1)*vel(i,2)+pos(i,1)*acc(i,2)
+    flux0(i)=0.5d0*vel(i,1)*(vel(i,1)**2+vel(i,2)**2+sum(pot(:,i)))
+    do j=1,N
+      flux0(i)=flux0(i)+rrr(j,i,1)*(sil(j,i,1)*vel(i,1)+sil(j,i,2)*vel(i,2))
+    enddo
+  enddo
+  call acorr(0)
 
-  write(fmt,'(i3.3)')idum
-  if (sam.eq.1) open(202,file='md-results'//trim(fmt)//'.sam')
-  call interactions()
-  call temperature()
+  !macrostate = average over microstates
+  if (f_sam.eq.1) then
+    write(fmt,'(i3.3)')idum
+    open(202,file='md_data'//trim(fmt)//'.sam')
+  endif
   do i=1,ntsteps
     call move()
     t=t+tstep
-    etot=ekin+u
-    if ( (sam.eq.1).and.(mod(i,nsam).eq.0) ) write(202,'(6f16.7)')t,u,ekin,etot,p,tem
-    uu=uu+u
-    uu2=uu2+u**2
-    pp=pp+p
-    m=m+1
-    if (mod(i,ncorr).eq.0) then
-      call corr()
-      mcorr=mcorr+1
+    if (mod(i,nsampl).eq.0) then
+      etot=ekin+u
+      if ( (f_sam.eq.1).and.(mod(i,nsam).eq.0) ) write(202,'(6e16.7)')t,ekin,tem,u,etot,p
+      uu=uu+u
+      uu2=uu2+u**2
+      pp=pp+p
+      nsampls=nsampls+1
+      eekin=eekin+ekin
+      ttem=ttem+tem
+      eetot=eetot+etot
+      call corr(idum)
+      call acorr(i)
     endif
-    if ( (frame.eq.1).and.(idum.eq.1).and.(mod(i,nframe).eq.0).and.(i/nframe.lt.(nframes+1)) ) then
+    if ( (f_frame.eq.1).and.(idum.eq.1).and.(mod(i,nframe).eq.0).and.(i/nframe.lt.nframes+1) ) then
       write(fmt,'(i3.3,i5.5)')idum,i/nframe
       call movie(fmt)
     endif
   enddo
-  if (sam.eq.1) close(202)
+  if (f_sam.eq.1) close(202)
 
-  uu=uu/dble(m)
-  uu2=uu2/dble(m)
-  pp=pp/dble(m)
+  !macrostate module
+  uu=uu/dble(nsampls)
+  pp=pp/dble(nsampls)
   pp=1.0d0+pp/2.0d0/dble(N)/temp
   pp=pp*dens*temp
-
-  do i=1,10000
-    c=Pi*dble(2*i-1)*grinterv**2
-    gr(i)=gr(i)/dble(N-1)/dble(mcorr)/dens/c
-  enddo
+  eekin=eekin/dble(nsampls)
+  ttem=ttem/dble(nsampls)
+  eetot=eetot/dble(nsampls)
 endsubroutine mdseries
+
+!----------------------------------------------------------------------------------------------------
+!Pair correlation function g(r) -- Radial distribution function
+!----------------------------------------------------------------------------------------------------
+subroutine corr(idum)
+  use parameters
+  use potential
+  use correlation
+  implicit none
+  integer :: idum
+  integer :: i,j
+  integer :: k
+  real*8 :: r
+
+  do i=1,N-1
+    do j=i+1,N
+      r=dis(i,j)
+      k=int(r/grinterv)        !floors double to integer
+      if (k.lt.10000) then
+        gr(idum,k+1)=gr(idum,k+1)+2.0d0
+      endif
+    enddo
+  enddo
+endsubroutine corr
+
+!----------------------------------------------------------------------------------------------------
+!Autocorrelation function v(t)v(0)
+!----------------------------------------------------------------------------------------------------
+subroutine acorr(i)
+  use parameters
+  use particles
+  use potential
+  use correlation
+  implicit none
+  integer :: i
+  integer :: j,k
+
+  do j=1,N
+    vt(i)=vt(i)+vel(j,1)*vel0(j,1)+vel(j,2)*vel0(j,2)
+    shear(i)=shear(i)+(vel(j,1)*vel(j,2)+pos(j,1)*acc(j,2))*shear0(j)
+    flux(i)=flux(i)+0.50d0*vel(j,1)*(vel(j,1)**2+vel(j,2)**2+sum(pot(:,j)))*flux0(j)
+    do k=1,N
+      flux(i)=flux(i)+(rrr(k,j,1)*(sil(k,j,1)*vel(j,1)+sil(k,j,2)*vel(j,2)))*flux0(j)
+    enddo
+  enddo
+
+  !correlation module
+  vt(i)=vt(i)/dble(N)
+  shear(i)=shear(i)/dble(N)
+  flux(i)=flux(i)/dble(N)
+  end subroutine acorr
 
 !-------------------------------------------------------
 !Snapshot
@@ -668,9 +818,9 @@ subroutine snapshot(fmt)
   character(3) :: fmt
   integer :: i
 
-  open(111,file='md-s'//fmt//'.snap')
+  open(111,file='md_s'//fmt//'.snap')
   do i=1,N
-    write(111,'(3f16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
+    write(111,'(3e16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
   enddo
   close(111)
 endsubroutine snapshot
@@ -685,9 +835,9 @@ subroutine movie(fmt)
   character(8) :: fmt
   integer :: i
 
-  open(111,file='md-f'//fmt//'.frame')
+  open(111,file='md_f'//fmt//'.frame')
   do i=1,N
-    write(111,'(3f16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
+    write(111,'(3e16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
   enddo
   close(111)
 endsubroutine movie

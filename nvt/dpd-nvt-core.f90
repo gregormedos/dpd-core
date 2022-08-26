@@ -5,7 +5,7 @@ module parameters
   real*8 :: temp                !temperature
   !simulation parameters
   real*8 :: lbox                !length of box
-  real*8 :: a1,a2               !LJ potential parameters
+  real*8 :: a1,a2,a3            !force field parameters
   integer :: cutoff             !flag to switch on or off potential cutoff
   real*8 :: rcut                !cutoff distance for potential
   integer :: ran                !random seed
@@ -86,16 +86,13 @@ program core
   real*8,dimension(:),allocatable :: ggr        !average g(r)
   real*8,dimension(:),allocatable :: dgr        !estimated error of g(r)
 
-  open(1002,file='dpd.log')
-  write(1002,*)'-------------------------------------------------------------------------'
-
-  open(1001,file='param')
+  open(1001,file='dpd_param')
   read(1001,*)tekst
   read(1001,*)tekst,N
   read(1001,*)tekst,dens
   read(1001,*)tekst,temp
   read(1001,*)tekst
-  read(1001,*)tekst,a1,a2
+  read(1001,*)tekst,a1,a2,a3
   read(1001,*)tekst,cutoff
   read(1001,*)tekst,rcut
   read(1001,*)tekst,ran
@@ -143,6 +140,8 @@ program core
   dt2=tstep/2.0d0
   d2t2=tstep**2/2.0d0
 
+  open(1002,file='dpd.log')
+  write(1002,*)'-------------------------------------------------------------------------'
   write(1002,*)'N=',N
   write(1002,*)'V=',lbox**2
   write(1002,*)'T=',temp
@@ -160,7 +159,7 @@ program core
   !----------------------------------------------------------
   call random_pos()
   if (f_snap.eq.1) call snapshot('sta')
-  write(1002,*)'particles randomly put in box'
+  write(1002,*)'clusters randomly put in box'
   write(1002,*)'-------------------------------------------------------------------------'
 
   call init_pos()
@@ -172,7 +171,7 @@ program core
   write(1002,*)'velocities initialized'
   write(1002,*)'-------------------------------------------------------------------------'
 
-  call dpdequil()
+  call equil()
   if (f_snap.eq.1) call snapshot('ekv')
   write(1002,*)'DPD equilibration successful'
   write(1002,*)'-------------------------------------------------------------------------'
@@ -301,7 +300,7 @@ program core
 endprogram core
 
 !----------------------------------------------------------------------------------------------------
-!Generates random initial positions for particles inside the box without overlapping
+!Generates random initial positions for clusters inside the box without overlapping
 !----------------------------------------------------------------------------------------------------
 subroutine random_pos()
   use parameters
@@ -401,7 +400,7 @@ function image(xa,xb,ll)
 endfunction image
 
 !----------------------------------------------------------------------------------------------------
-!Calculates interactions between all particles
+!Calculates interactions between all clusters
 !----------------------------------------------------------------------------------------------------
 subroutine interactions()
   use parameters
@@ -475,24 +474,19 @@ subroutine interactions()
 endsubroutine interactions
 
 !----------------------------------------------------------------------------------------------------
-!Calculates the CS potential between two particles
+!Calculates the force between two clusters
 !----------------------------------------------------------------------------------------------------
-function ljpot(r2,a1,a2,p)
+function force(r,v,a1,a2,a3,s)
   implicit none
   !using reduced units
-  real*8 :: r2
-  real*8 :: a1,a2
-  !a1=epsilon = absolute value of the minimum value of the LJ potential (depth of the potential well)
-  !a2=sigma = distance at which the potential becomes positive
-  real*8 :: x
-  real*8 :: ljpot,p !CS potential, virial pressure
+  real*8 :: r,v !distance, projection of the difference in velocity onto the direction between the clusters
+  real*8 :: a1,a2,a3
+  real*8 :: s !random Gaussian number with unit variance
+  real*8 :: force
 
-  x=a2**2/r2
-  x=x**3
-  ljpot=4.0d0*a1*x*(x-1.0d0)
-  p=48.0d0*a1*x*(x-0.5d0)        ! -dU/dr * r = F * r
+  force=a1*(1.0d0-r)+a2*(1.0d0-r)*s-a3*(1.0d0-r)**2*v
   return
-endfunction ljpot
+endfunction force
 
 !---------------------------------------------------------------------------------------------
 !Initializes positions for a homogeneous fluid
@@ -519,7 +513,7 @@ endsubroutine init_pos
 
 !-------------------------------------------------------------------------------------------------------------------------------
 !Initializes velocities for an isotropic fluid
-!Box-Muller transform for Maxwell-Boltzmann distribution
+!Box-Muller transform with Marsaglia polar method for Maxwell-Boltzmann distribution
 !-------------------------------------------------------------------------------------------------------------------------------
 subroutine init_vel()
   use parameters
@@ -532,7 +526,7 @@ subroutine init_vel()
   real*8 :: sumvel(2)
   real*8 :: rescale
 
-  !Box-Muller transform
+  !Box-Muller transform with Marsaglia polar method
   x1=0.0d0
   x2=0.0d0
   sigma=dsqrt(temp)
@@ -631,7 +625,7 @@ endsubroutine move
 !----------------------------------------------------------------------------------------------------
 !DPD equilibration
 !----------------------------------------------------------------------------------------------------
-subroutine dpdequil()
+subroutine equil()
   use parameters
   use particles
   use microstate
@@ -678,7 +672,7 @@ subroutine dpdequil()
   eekin=eekin/dble(nsampls)
   ttem=ttem/dble(nsampls)
   eetot=eetot/dble(nsampls)
-endsubroutine dpdequil
+endsubroutine equil
 
 !----------------------------------------------------------------------------------------------------
 !DPD sampling
