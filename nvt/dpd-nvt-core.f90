@@ -5,7 +5,7 @@ module parameters
   real*8 :: temp                !temperature
   !simulation parameters
   real*8 :: lbox                !length of box
-  real*8 :: a1,a2,a3            !force field parameters
+  real*8 :: a1,a2,b1,b2,c1      !force field parameters
   integer :: cutoff             !flag to switch on or off potential cutoff
   real*8 :: rcut                !cutoff distance for potential
   integer :: ran                !random seed
@@ -76,7 +76,7 @@ program core
   character :: tekst
   character(8) :: fmt
   integer :: i,j
-  real*8 :: cv                                  !heat capacity
+  real*8 :: cv                                  !excess heat capacity
   real*8 :: c                                   !numerical constant
   real*8 :: stru                                !translational order parameter
   real*8,dimension(:),allocatable :: vvt,vvt2,ssh,ssh2,ffl,ffl2
@@ -92,7 +92,7 @@ program core
   read(1001,*)tekst,dens
   read(1001,*)tekst,temp
   read(1001,*)tekst
-  read(1001,*)tekst,a1,a2,a3
+  read(1001,*)tekst,a1,a2,b1,b2
   read(1001,*)tekst,cutoff
   read(1001,*)tekst,rcut
   read(1001,*)tekst,ran
@@ -139,6 +139,7 @@ program core
   lbox=dsqrt(dble(N)/dens)
   dt2=tstep/2.0d0
   d2t2=tstep**2/2.0d0
+  c1=b1**2/2.0d0/temp !Fluctutaion-dissipation theorem (thermostat is built into the Langevin stochastic dynamics)
 
   open(1002,file='dpd.log')
   write(1002,*)'-------------------------------------------------------------------------'
@@ -408,8 +409,11 @@ subroutine interactions()
   use potential
   use microstate
   implicit none
-  real*8 :: image,ljpot,tl !functions
+  real*8 :: image,ran3,force,potent !functions
   real*8 :: x,y,r,r2
+  real*8 :: vx,vy,v
+  real*8 :: f
+  real*8 :: x1,x2,s
   integer :: i,j
 
   !potential module
@@ -427,24 +431,38 @@ subroutine interactions()
   !interactions
   do i=1,N-1
     do j=i+1,N
-      x=image(pos(i,1),pos(j,1),lbox)
-      y=image(pos(i,2),pos(j,2),lbox)
+      x=image(pos(j,1),pos(i,1),lbox)
+      y=image(pos(j,2),pos(i,2),lbox)
       r2=x**2+y**2
       r=dsqrt(r2)
-      if ( (cutoff.eq.0).or.(r.lt.rcut) ) then
+      if ( (cutoff.ne.1).or.(r.lt.rcut) ) then
+        vx=vel(i,1)-vel(j,1)
+        vy=vel(i,2)-vel(j,2)
+        v=(vx*x+vy*y)/r
+        !Box-Muller transform with Marsaglia polar method
+        x1=0.0d0
+        x2=0.0d0
+        s=2.0d0
+        do while ((s.eq.0.0d0).or.(s.ge.1.0d0))
+          x1=2.0d0*ran3(ran)-1.0d0
+          x2=2.0d0*ran3(ran)-1.0d0
+          s=x1**2+x2**2
+        enddo
+        s=x1*dsqrt(-2.0d0*dlog(s)/s)
         !potential module
-        pot(i,j)=ljpot(r2,a1,a2,tl)
-        tla(i,j)=tl
-        sil(i,j,1)=tl*x/r2
-        sil(i,j,2)=tl*y/r2
-        sil(j,i,1)=-sil(i,j,1)
-        sil(j,i,2)=-sil(i,j,2)
+        f=force(r2,r,v,a1,a2,b1,b2,c1,s,potent)
+        pot(i,j)=potent
+        tla(i,j)=f*r
+        sil(i,j,1)=f*x/r
+        sil(i,j,2)=f*y/r
         dis(i,j)=r
         dis2(i,j)=r2
         rrr(i,j,1)=x
         rrr(i,j,2)=y
         pot(j,i)=pot(i,j)
-        tla(j,i)=tl
+        tla(j,i)=tla(i,j)
+        sil(j,i,1)=-sil(i,j,1)
+        sil(j,i,2)=-sil(i,j,2)
         dis(j,i)=r
         dis2(j,i)=r2
         rrr(j,i,1)=-x
@@ -453,7 +471,7 @@ subroutine interactions()
         u=u+pot(i,j)
         p=p+tla(i,j)
       else
-        !potential module
+        !potential moduleclusters
         dis(i,j)=r
         dis2(i,j)=r2
         rrr(i,j,1)=x
@@ -467,24 +485,34 @@ subroutine interactions()
   enddo
 
   !particles module
-  do j=1,N
-    acc(j,1)=sum(sil(:,j,1))
-    acc(j,2)=sum(sil(:,j,2))
+  do i=1,N
+    acc(i,1)=sum(sil(i,:,1))
+    acc(i,2)=sum(sil(i,:,2))
   enddo
 endsubroutine interactions
 
 !----------------------------------------------------------------------------------------------------
 !Calculates the force between two clusters
 !----------------------------------------------------------------------------------------------------
-function force(r,v,a1,a2,a3,s)
+function force(r2,r,v,a1,a2,b1,b2,c1,s,potent)
   implicit none
   !using reduced units
-  real*8 :: r,v !distance, projection of the difference in velocity onto the direction between the clusters
-  real*8 :: a1,a2,a3
+  real*8 :: r2,r,v !distance squared, distance, projection of the relative velocity onto the direction between the clusters
+  real*8 :: a1,a2,b1,b2,c1
   real*8 :: s !random Gaussian number with unit variance
-  real*8 :: force
+  real*8 :: w !weight function
+  real*8 :: x
+  real*8 :: force,potent
 
-  force=a1*(1.0d0-r)+a2*(1.0d0-r)*s-a3*(1.0d0-r)**2*v
+  if (r.lt.b2) then
+    w=1.0d0-r/b2
+  else
+    w=0.0d0
+  endif
+  x=a2**2/r2
+  x=x**3
+  force=48.0d0*a1*x*(x-0.5d0)/r+b1*w*s-c1*w**2*v
+  potent=4.0d0*a1*x*(x-1.0d0)
   return
 endfunction force
 
@@ -582,7 +610,6 @@ endsubroutine temperature
 
 !-------------------------------------------------------------------------
 !Velocity Verlet algorithm for calculating velocities
-!Rescaling thermostat
 !Newton's equations of motion
 !-------------------------------------------------------------------------
 subroutine move()
@@ -592,7 +619,6 @@ subroutine move()
   implicit none
   integer :: i
   real*8 :: image !function
-  real*8 :: rescale
 
   do i=1,N
     !half-update the particle velocities by tstep/2
@@ -616,10 +642,6 @@ subroutine move()
   
   !update the temperature
   call temperature()
-
-  !rescale the particle velocities to the desired temperature
-  rescale=dsqrt(temp/tem)
-  vel=vel*rescale
 endsubroutine move
 
 !----------------------------------------------------------------------------------------------------
@@ -647,9 +669,11 @@ subroutine equil()
   nsampls=0
 
   !macrostate = average over microstates
-  if (f_sam.eq.1) open(202,file='dpd_ekv.sam')
+  if (f_sam.eq.1) open(202,file='dpd_sam_ekv')
   do i=1,nesteps
     call move()
+!rescale the particle velocities to the desired temperature
+vel=vel*dsqrt(temp/tem)
     t=t+tstep
     if (mod(i,nsampl).eq.0) then
       etot=ekin+u
@@ -709,7 +733,7 @@ subroutine dpdseries(idum)
     shear0(i)=vel(i,1)*vel(i,2)+pos(i,1)*acc(i,2)
     flux0(i)=0.5d0*vel(i,1)*(vel(i,1)**2+vel(i,2)**2+sum(pot(:,i)))
     do j=1,N
-      flux0(i)=flux0(i)+rrr(j,i,1)*(sil(j,i,1)*vel(i,1)+sil(j,i,2)*vel(i,2))
+      flux0(i)=flux0(i)+rrr(i,j,1)*(sil(i,j,1)*vel(i,1)+sil(i,j,2)*vel(i,2))
     enddo
   enddo
   call acorr(0)
@@ -717,7 +741,7 @@ subroutine dpdseries(idum)
   !macrostate = average over microstates
   if (f_sam.eq.1) then
     write(fmt,'(i3.3)')idum
-    open(202,file='dpd_data'//trim(fmt)//'.sam')
+    open(202,file='dpd_sam_'//trim(fmt))
   endif
   do i=1,ntsteps
     call move()
@@ -791,9 +815,9 @@ subroutine acorr(i)
   do j=1,N
     vt(i)=vt(i)+vel(j,1)*vel0(j,1)+vel(j,2)*vel0(j,2)
     shear(i)=shear(i)+(vel(j,1)*vel(j,2)+pos(j,1)*acc(j,2))*shear0(j)
-    flux(i)=flux(i)+0.50d0*vel(j,1)*(vel(j,1)**2+vel(j,2)**2+sum(pot(:,j)))*flux0(j)
+    flux(i)=flux(i)+0.50d0*vel(j,1)*(vel(j,1)**2+vel(j,2)**2+sum(pot(j,:)))*flux0(j)
     do k=1,N
-      flux(i)=flux(i)+(rrr(k,j,1)*(sil(k,j,1)*vel(j,1)+sil(k,j,2)*vel(j,2)))*flux0(j)
+      flux(i)=flux(i)+(rrr(j,k,1)*(sil(j,k,1)*vel(j,1)+sil(j,k,2)*vel(j,2)))*flux0(j)
     enddo
   enddo
 
@@ -813,7 +837,7 @@ subroutine snapshot(fmt)
   character(3) :: fmt
   integer :: i
 
-  open(111,file='dpd_s'//fmt//'.snap')
+  open(111,file='dpd_snap_'//fmt)
   do i=1,N
     write(111,'(3e16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
   enddo
@@ -830,7 +854,7 @@ subroutine movie(fmt)
   character(8) :: fmt
   integer :: i
 
-  open(111,file='dpd_f'//fmt//'.frame')
+  open(111,file='dpd_frame_'//fmt)
   do i=1,N
     write(111,'(3e16.7)')pos(i,1)/lbox,pos(i,2)/lbox,a2/2.0d0/lbox
   enddo
