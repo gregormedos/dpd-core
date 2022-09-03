@@ -294,6 +294,18 @@ program core
   deallocate( gr )
   deallocate( ggr )
   deallocate( dgr )
+  deallocate( vt )
+  deallocate( shear )
+  deallocate( flux )
+  deallocate( vel0 )
+  deallocate( shear0 )
+  deallocate( flux0 )
+  deallocate( vvt )
+  deallocate( vvt2 )
+  deallocate( ssh )
+  deallocate( ssh2 )
+  deallocate( ffl )
+  deallocate( ffl2 )
 
   open(1002,file='md_DONE')
   close(1002)
@@ -749,6 +761,7 @@ subroutine mdseries(idum)
 
   !macrostate module
   uu=uu/dble(nsampls)
+  uu2=uu2/dble(nsampls)
   pp=pp/dble(nsampls)
   pp=1.0d0+pp/2.0d0/dble(N)/temp
   pp=pp*dens*temp
