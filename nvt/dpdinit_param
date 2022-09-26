@@ -8,7 +8,7 @@
 'cutoff flag'                                1
 'cutoff distance'                            5.0d0
 'random seed'                                1111
-'number of series of sampling'               2
+'number of series of sampling'               100
 'number of time steps per sample'            10
 'snapshots flag'                             1
 'energies flag'                              1
@@ -18,7 +18,7 @@
 'number of time steps per frame saved'       100
 'DPD parameters'
 'number of time steps for equilibration'     50000
-'number of time steps for sampling'          100000
+'number of time steps for sampling'          10000
 'time step'                                  0.001d0
 'correlation function parameters'
 'g(r) radial interval'                       0.02d0
